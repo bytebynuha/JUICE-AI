@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
 function App() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
   const [error, setError] = useState("");
+  const [uploadStatus, setUploadStatus] = useState("");
 
   // Investigator
   const [selectedException, setSelectedException] = useState(null);
@@ -15,9 +18,15 @@ function App() {
   // AI Summary
   const [aiSummaryOpen, setAiSummaryOpen] = useState(false);
 
+  // Instructions panel
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+
   // Orb finance tips
   const [orbTipIndex, setOrbTipIndex] = useState(0);
   const [orbHovered, setOrbHovered] = useState(false);
+
+  const fileInputRef = useRef(null);
+  const instructionsRef = useRef(null);
 
   const financeTips = [
     {
@@ -52,14 +61,56 @@ function App() {
     }
 
     const interval = setInterval(() => {
-      setOrbTipIndex((current) => (current + 1) % financeTips.length);
+      setOrbTipIndex(
+        (current) => (current + 1) % financeTips.length
+      );
     }, 3200);
 
     return () => clearInterval(interval);
   }, [orbHovered, financeTips.length]);
 
+  // Close instructions when clicking outside
+  useEffect(() => {
+    const handleOutsideClick = (event) => {
+      if (
+        instructionsOpen &&
+        instructionsRef.current &&
+        !instructionsRef.current.contains(event.target)
+      ) {
+        setInstructionsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleOutsideClick);
+
+    return () => {
+      document.removeEventListener(
+        "mousedown",
+        handleOutsideClick
+      );
+    };
+  }, [instructionsOpen]);
+
+  // ESC closes panels/modals
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setInstructionsOpen(false);
+        setSelectedException(null);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
   const handleOrbEnter = () => {
-    setOrbTipIndex((current) => (current + 1) % financeTips.length);
+    setOrbTipIndex(
+      (current) => (current + 1) % financeTips.length
+    );
     setOrbHovered(true);
   };
 
@@ -68,12 +119,28 @@ function App() {
   };
 
   // =====================================================
-  // RUN RECONCILIATION
+  // SMOOTH SCROLL
+  // =====================================================
+
+  const scrollToSection = (id) => {
+    const element = document.getElementById(id);
+
+    if (element) {
+      element.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }
+  };
+
+  // =====================================================
+  // RUN NORMAL RECONCILIATION
   // =====================================================
 
   const runReconciliation = async () => {
     setLoading(true);
     setError("");
+    setUploadStatus("");
 
     try {
       const response = await fetch(
@@ -93,6 +160,10 @@ function App() {
       setSeverityFilter("ALL");
       setSelectedException(null);
       setAiSummaryOpen(false);
+
+      setTimeout(() => {
+        scrollToSection("overview");
+      }, 100);
     } catch (err) {
       console.error(err);
 
@@ -105,47 +176,214 @@ function App() {
   };
 
   // =====================================================
+  // FILE UPLOAD
+  // =====================================================
+
+  const openFilePicker = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = async (event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    await uploadAndReconcile(file);
+
+    // Allows the same file to be selected again later
+    event.target.value = "";
+  };
+
+  const uploadAndReconcile = async (file) => {
+    const allowedExtensions = [
+      ".csv",
+      ".xls",
+      ".xlsx",
+    ];
+
+    const fileName = file.name.toLowerCase();
+
+    const isValidFile = allowedExtensions.some(
+      (extension) => fileName.endsWith(extension)
+    );
+
+    if (!isValidFile) {
+      setError(
+        "Unsupported file format. Please upload CSV, XLS, or XLSX."
+      );
+      return;
+    }
+
+    setUploading(true);
+    setLoading(false);
+    setError("");
+    setUploadStatus(
+      `Uploading ${file.name} and preparing your data...`
+    );
+
+    try {
+      const formData = new FormData();
+
+      formData.append("file", file);
+
+      const response = await fetch(
+        "http://127.0.0.1:8000/upload-reconcile",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          "Upload or preprocessing failed."
+        );
+      }
+
+      setUploadStatus(
+        "File uploaded. Cleaning and preprocessing financial records..."
+      );
+
+      const data = await response.json();
+
+      setResult(data);
+      setSeverityFilter("ALL");
+      setSelectedException(null);
+      setAiSummaryOpen(false);
+
+      setUploadStatus(
+        `✓ ${file.name} processed successfully.`
+      );
+
+      setTimeout(() => {
+        setUploadStatus("");
+        scrollToSection("overview");
+      }, 1800);
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        "JUICE could not process this file. Check that the backend is running and the file contains valid financial data."
+      );
+
+      setUploadStatus("");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // =====================================================
+  // GENERATE PDF FINANCE REPORT
+  // =====================================================
+
+  const generateFinanceReport = async () => {
+    if (!result) {
+      setError(
+        "Run a reconciliation before generating the finance report."
+      );
+
+      return;
+    }
+
+    setReportLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8000/generate-report",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(result),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Report generation failed.");
+      }
+
+      const blob = await response.blob();
+
+      const url = window.URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = "JUICE_Finance_Report.pdf";
+
+      document.body.appendChild(link);
+
+      link.click();
+
+      link.remove();
+
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        "JUICE couldn't generate the finance report. Make sure the report endpoint is available."
+      );
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  // =====================================================
   // HELPERS
   // =====================================================
 
   const formatMoney = (value) => {
-    return Number(value || 0).toLocaleString("en-IN", {
-      maximumFractionDigits: 2,
-    });
+    return Number(value || 0).toLocaleString(
+      "en-IN",
+      {
+        maximumFractionDigits: 2,
+      }
+    );
   };
 
   const getSeverityClass = (severity) => {
     return severity?.toLowerCase() || "low";
   };
 
-  // IMPORTANT:
-  // These variables fix the previous AI Summary crash.
-  const exceptions = result?.exception_details || [];
+  // =====================================================
+  // EXCEPTIONS
+  // =====================================================
+
+  const exceptions =
+    result?.exception_details || [];
+
   const exceptionCount = exceptions.length;
 
   const highCount = exceptions.filter(
-    (exception) => exception.severity === "HIGH"
+    (exception) =>
+      exception.severity === "HIGH"
   ).length;
 
   const mediumCount = exceptions.filter(
-    (exception) => exception.severity === "MEDIUM"
+    (exception) =>
+      exception.severity === "MEDIUM"
   ).length;
 
   const lowCount = exceptions.filter(
-    (exception) => exception.severity === "LOW"
+    (exception) =>
+      exception.severity === "LOW"
   ).length;
 
-  // =====================================================
-  // FILTER EXCEPTIONS
-  // =====================================================
-
-  const filteredExceptions = exceptions.filter((exception) => {
-    if (severityFilter === "ALL") {
-      return true;
-    }
-
-    return exception.severity === severityFilter;
-  });
+  const filteredExceptions =
+    severityFilter === "ALL"
+      ? exceptions
+      : exceptions.filter(
+          (exception) =>
+            exception.severity ===
+            severityFilter
+        );
 
   const getFilterCount = (severity) => {
     if (severity === "ALL") {
@@ -153,7 +391,8 @@ function App() {
     }
 
     return exceptions.filter(
-      (exception) => exception.severity === severity
+      (exception) =>
+        exception.severity === severity
     ).length;
   };
 
@@ -169,8 +408,13 @@ function App() {
       };
     }
 
-    const matchRate = Number(result.match_rate || 0);
-    const exposure = Number(result.financial_exposure || 0);
+    const matchRate = Number(
+      result.match_rate || 0
+    );
+
+    const exposure = Number(
+      result.financial_exposure || 0
+    );
 
     if (
       highCount > 0 ||
@@ -225,13 +469,17 @@ function App() {
 
     if (highCount > 0) {
       return `JUICE detected ${highCount} high-severity ${
-        highCount === 1 ? "exception" : "exceptions"
+        highCount === 1
+          ? "exception"
+          : "exceptions"
       }. These should be reviewed before accounting records are changed.`;
     }
 
     if (exceptionCount > 0) {
       return `JUICE detected ${exceptionCount} ${
-        exceptionCount === 1 ? "exception" : "exceptions"
+        exceptionCount === 1
+          ? "exception"
+          : "exceptions"
       } with ₹${formatMoney(
         result.financial_exposure
       )} in associated financial exposure.`;
@@ -241,104 +489,152 @@ function App() {
   };
 
   const getAITopPriority = () => {
-    if (!result || exceptions.length === 0) {
+    if (
+      !result ||
+      exceptions.length === 0
+    ) {
       return "No immediate action required";
     }
 
     const high = exceptions.find(
-      (exception) => exception.severity === "HIGH"
+      (exception) =>
+        exception.severity === "HIGH"
     );
 
     if (high) {
-      return high.type.replaceAll("_", " ");
+      return (
+        high.type?.replaceAll(
+          "_",
+          " "
+        ) || "High-risk exception"
+      );
     }
 
-    const largest = [...exceptions].sort(
+    const largest = [
+      ...exceptions,
+    ].sort(
       (a, b) =>
-        Number(b.financial_impact || 0) -
-        Number(a.financial_impact || 0)
+        Number(
+          b.financial_impact || 0
+        ) -
+        Number(
+          a.financial_impact || 0
+        )
     )[0];
 
-    return largest?.type?.replaceAll("_", " ") || "Review exceptions";
+    return (
+      largest?.type?.replaceAll(
+        "_",
+        " "
+      ) || "Review exceptions"
+    );
   };
 
   // =====================================================
   // FINANCIAL CHART DATA
   // =====================================================
 
-  const getSeverityExposure = (severity) => {
+  const getSeverityExposure = (
+    severity
+  ) => {
     return exceptions
-      .filter((exception) => exception.severity === severity)
+      .filter(
+        (exception) =>
+          exception.severity ===
+          severity
+      )
       .reduce(
         (total, exception) =>
-          total + Number(exception.financial_impact || 0),
+          total +
+          Number(
+            exception.financial_impact ||
+              0
+          ),
         0
       );
   };
 
-  const highExposure = getSeverityExposure("HIGH");
-  const mediumExposure = getSeverityExposure("MEDIUM");
-  const lowExposure = getSeverityExposure("LOW");
+  const highExposure =
+    getSeverityExposure("HIGH");
 
-  const maxSeverityExposure = Math.max(
-    highExposure,
-    mediumExposure,
-    lowExposure,
-    1
-  );
+  const mediumExposure =
+    getSeverityExposure("MEDIUM");
 
-  // =====================================================
-  // EXCEPTION TYPE DATA
-  // =====================================================
+  const lowExposure =
+    getSeverityExposure("LOW");
 
-  const getExceptionTypeCount = (type) => {
+  const maxSeverityExposure =
+    Math.max(
+      highExposure,
+      mediumExposure,
+      lowExposure,
+      1
+    );
+
+  const getExceptionTypeCount = (
+    type
+  ) => {
     return exceptions.filter(
-      (exception) => exception.type === type
+      (exception) =>
+        exception.type === type
     ).length;
   };
 
   const missingBankCount =
-    getExceptionTypeCount("MISSING_FROM_BANK");
+    getExceptionTypeCount(
+      "MISSING_FROM_BANK"
+    );
 
   const missingLedgerCount =
-    getExceptionTypeCount("MISSING_FROM_LEDGER");
+    getExceptionTypeCount(
+      "MISSING_FROM_LEDGER"
+    );
 
   const amountMismatchCount =
-    getExceptionTypeCount("AMOUNT_MISMATCH");
+    getExceptionTypeCount(
+      "AMOUNT_MISMATCH"
+    );
 
   const referenceMismatchCount =
-    getExceptionTypeCount("REFERENCE_MISMATCH");
+    getExceptionTypeCount(
+      "REFERENCE_MISMATCH"
+    );
 
   const duplicateCount =
-    getExceptionTypeCount("DUPLICATE_TRANSACTION");
+    getExceptionTypeCount(
+      "DUPLICATE_TRANSACTION"
+    );
 
-  const maxExceptionTypeCount = Math.max(
-    missingBankCount,
-    missingLedgerCount,
-    amountMismatchCount,
-    referenceMismatchCount,
-    duplicateCount,
-    1
-  );
+  const maxExceptionTypeCount =
+    Math.max(
+      missingBankCount,
+      missingLedgerCount,
+      amountMismatchCount,
+      referenceMismatchCount,
+      duplicateCount,
+      1
+    );
 
   const exceptionExposure = Number(
     result?.financial_exposure || 0
   );
 
-  const matchedTransactionCount = Number(
-    result?.matched || 0
-  );
+  const matchedTransactionCount =
+    Number(result?.matched || 0);
 
-  const totalTransactions = Number(
-    result?.total_transactions || 0
-  );
+  const totalTransactions =
+    Number(
+      result?.total_transactions || 0
+    );
 
   const averageTransactionValue =
     totalTransactions > 0
-      ? exceptionExposure / totalTransactions
+      ? exceptionExposure /
+        totalTransactions
       : 0;
 
-  const currentTip = financeTips[orbTipIndex];
+  const currentTip =
+    financeTips[orbTipIndex];
 
   // =====================================================
   // RENDER
@@ -348,12 +644,29 @@ function App() {
     <div className="juice-app">
 
       {/* =================================================
-          NAVBAR
+          HIDDEN FILE INPUT
+      ================================================= */}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,.xls,.xlsx"
+        onChange={handleFileChange}
+        className="hidden-file-input"
+      />
+
+      {/* =================================================
+          TOP NAVBAR
       ================================================= */}
 
       <nav className="navbar">
 
-        <div className="brand">
+        <div
+          className="brand"
+          onClick={() =>
+            scrollToSection("overview")
+          }
+        >
 
           <div className="brand-mark">
             <span>✦</span>
@@ -370,6 +683,96 @@ function App() {
             </div>
 
           </div>
+
+        </div>
+
+        <div className="toolbar">
+
+          <button
+            className="nav-tool active"
+            onClick={() =>
+              scrollToSection(
+                "overview"
+              )
+            }
+          >
+            Overview
+          </button>
+
+          <button
+            className="nav-tool"
+            onClick={() =>
+              scrollToSection(
+                "risk"
+              )
+            }
+          >
+            Risk
+          </button>
+
+          <button
+            className="nav-tool"
+            onClick={() =>
+              scrollToSection(
+                "analytics"
+              )
+            }
+          >
+            Analytics
+          </button>
+
+          <button
+            className="nav-tool"
+            onClick={() =>
+              scrollToSection(
+                "ai-summary"
+              )
+            }
+          >
+            AI Summary
+          </button>
+
+          <button
+            className="nav-tool"
+            onClick={() =>
+              scrollToSection(
+                "exceptions"
+              )
+            }
+          >
+            Exceptions
+          </button>
+
+          <button
+            className="nav-tool upload-nav-tool"
+            onClick={openFilePicker}
+          >
+            ↑ Upload Data
+          </button>
+
+          <button
+            className="nav-tool"
+            onClick={() =>
+              setInstructionsOpen(true)
+            }
+          >
+            ? Instructions
+          </button>
+
+          <button
+            className="nav-tool report-nav-tool"
+            onClick={
+              generateFinanceReport
+            }
+            disabled={
+              !result ||
+              reportLoading
+            }
+          >
+            {reportLoading
+              ? "Preparing..."
+              : "↓ Finance Report"}
+          </button>
 
         </div>
 
@@ -398,7 +801,10 @@ function App() {
             HERO
         ================================================= */}
 
-        <section className="hero-section">
+        <section
+          id="overview"
+          className="hero-section"
+        >
 
           <div className="hero-copy">
 
@@ -409,27 +815,79 @@ function App() {
             <h1>
               Your finances,
               <br />
-              <span>finally intelligent.</span>
+              <span>
+                finally intelligent.
+              </span>
             </h1>
 
             <p>
-              JUICE brings your payment, settlement,
-              bank, and ledger data together to
-              reconcile transactions and surface
+              JUICE brings your payment,
+              settlement, bank, and ledger
+              data together to reconcile
+              transactions and surface
               financial risk.
             </p>
 
+            <div className="hero-actions">
+
+              <button
+                className="primary-button"
+                onClick={
+                  runReconciliation
+                }
+                disabled={loading}
+              >
+                <span>
+                  {loading
+                    ? "JUICE is working..."
+                    : "Start Reconciliation →"}
+                </span>
+              </button>
+
+              <button
+                className="secondary-button"
+                onClick={
+                  openFilePicker
+                }
+                disabled={uploading}
+              >
+                ↑ Upload CSV / Excel
+              </button>
+
+              <button
+                className="secondary-button report-button"
+                onClick={
+                  generateFinanceReport
+                }
+                disabled={
+                  !result ||
+                  reportLoading
+                }
+              >
+                {reportLoading
+                  ? "Generating..."
+                  : "↓ PDF Report"}
+              </button>
+
+            </div>
+
             <button
-              className="primary-button"
-              onClick={runReconciliation}
-              disabled={loading}
+              className="instruction-link"
+              onClick={() =>
+                setInstructionsOpen(
+                  true
+                )
+              }
             >
-              <span>
-                {loading
-                  ? "JUICE is working..."
-                  : "Start Reconciliation →"}
-              </span>
+              ? How should I prepare my file?
             </button>
+
+            {uploadStatus && (
+              <div className="upload-status">
+                <span className="upload-status-dot"></span>
+                {uploadStatus}
+              </div>
+            )}
 
             {error && (
               <div className="error-box">
@@ -452,11 +910,18 @@ function App() {
 
             <div
               className={`ai-orb ${
-                orbHovered ? "orb-active" : ""
+                orbHovered
+                  ? "orb-active"
+                  : ""
               }`}
-              onMouseEnter={handleOrbEnter}
-              onMouseLeave={handleOrbLeave}
+              onMouseEnter={
+                handleOrbEnter
+              }
+              onMouseLeave={
+                handleOrbLeave
+              }
             >
+
               <div className="orb-inner-glow"></div>
 
               <span>✦</span>
@@ -464,6 +929,7 @@ function App() {
               <div className="orb-label">
                 JUICE AI
               </div>
+
             </div>
 
             {/* =================================================
@@ -472,9 +938,12 @@ function App() {
 
             <div
               className={`orb-hover-message ${
-                orbHovered ? "show" : ""
+                orbHovered
+                  ? "show"
+                  : ""
               }`}
             >
+
               <div className="orb-tip-tag">
                 ✦ FINANCE TIP
               </div>
@@ -492,6 +961,7 @@ function App() {
                   key={orbTipIndex}
                 ></span>
               </div>
+
             </div>
 
             {/* =================================================
@@ -499,7 +969,10 @@ function App() {
             ================================================= */}
 
             <div className="floating-card card-one">
-              <span>Transactions</span>
+
+              <span>
+                Transactions
+              </span>
 
               <strong>
                 {result
@@ -510,11 +983,14 @@ function App() {
               <small>
                 Records processed
               </small>
+
             </div>
 
             <div className="floating-card card-two">
 
-              <span>Match rate</span>
+              <span>
+                Match rate
+              </span>
 
               <strong>
                 {result
@@ -530,7 +1006,9 @@ function App() {
 
             <div className="floating-card card-three">
 
-              <span>AI status</span>
+              <span>
+                AI status
+              </span>
 
               <strong>
                 Ready ✦
@@ -564,8 +1042,8 @@ function App() {
               </div>
 
               <div className="processing-text">
-                Comparing payment, bank, settlement,
-                and ledger records...
+                Comparing payment, bank,
+                settlement, and ledger records...
               </div>
 
               <div className="processing-progress">
@@ -587,10 +1065,13 @@ function App() {
           <>
 
             {/* =================================================
-                SECTION HEADER
+                OVERVIEW
             ================================================= */}
 
-            <section className="section-header">
+            <section
+              id="overview-results"
+              className="section-header"
+            >
 
               <div>
 
@@ -605,15 +1086,14 @@ function App() {
               </div>
 
               <div className="success-pill">
+
                 <span></span>
+
                 Reconciled
+
               </div>
 
             </section>
-
-            {/* =================================================
-                METRICS
-            ================================================= */}
 
             <section className="metrics-grid">
 
@@ -687,7 +1167,10 @@ function App() {
                 EXPOSURE
             ================================================= */}
 
-            <section className="exposure-section">
+            <section
+              id="risk"
+              className="exposure-section"
+            >
 
               <div className="exposure-content">
 
@@ -715,6 +1198,7 @@ function App() {
                 </p>
 
                 <div className="exposure-meta">
+
                   <span>
                     {exceptionCount}{" "}
                     {exceptionCount === 1
@@ -729,6 +1213,7 @@ function App() {
                   <span>
                     Human review recommended
                   </span>
+
                 </div>
 
               </div>
@@ -762,7 +1247,10 @@ function App() {
                 FINANCIAL CHARTS
             ================================================= */}
 
-            <section className="charts-section">
+            <section
+              id="analytics"
+              className="charts-section"
+            >
 
               <div className="charts-header">
 
@@ -789,8 +1277,6 @@ function App() {
 
               </div>
 
-              {/* SUMMARY */}
-
               <div className="chart-summary-grid">
 
                 <div className="chart-summary-card">
@@ -800,7 +1286,10 @@ function App() {
                   </div>
 
                   <div className="chart-summary-value">
-                    ₹{formatMoney(exceptionExposure)}
+                    ₹
+                    {formatMoney(
+                      exceptionExposure
+                    )}
                   </div>
 
                   <div className="chart-summary-subtext">
@@ -832,7 +1321,10 @@ function App() {
                   </div>
 
                   <div className="chart-summary-value">
-                    ₹{formatMoney(averageTransactionValue)}
+                    ₹
+                    {formatMoney(
+                      averageTransactionValue
+                    )}
                   </div>
 
                   <div className="chart-summary-subtext">
@@ -843,8 +1335,6 @@ function App() {
 
               </div>
 
-              {/* CHARTS */}
-
               <div className="financial-chart-grid">
 
                 {/* SEVERITY */}
@@ -854,6 +1344,7 @@ function App() {
                   <div className="chart-card-header">
 
                     <div>
+
                       <div className="chart-card-title">
                         Exposure by severity
                       </div>
@@ -861,6 +1352,7 @@ function App() {
                       <div className="chart-card-subtitle">
                         Where financial risk is concentrated
                       </div>
+
                     </div>
 
                     <div className="chart-icon">
@@ -871,95 +1363,72 @@ function App() {
 
                   <div className="severity-chart">
 
-                    <div className="chart-row">
+                    {[
+                      [
+                        "High",
+                        highExposure,
+                        "high",
+                      ],
+                      [
+                        "Medium",
+                        mediumExposure,
+                        "medium",
+                      ],
+                      [
+                        "Low",
+                        lowExposure,
+                        "low",
+                      ],
+                    ].map(
+                      ([
+                        label,
+                        value,
+                        className,
+                      ]) => (
+                        <div
+                          className="chart-row"
+                          key={label}
+                        >
 
-                      <div className="chart-row-label">
-                        <span className="chart-dot high"></span>
-                        High
-                      </div>
+                          <div className="chart-row-label">
 
-                      <div className="bar-area">
+                            <span
+                              className={`chart-dot ${className}`}
+                            ></span>
 
-                        <div className="bar-track">
-                          <div
-                            className="bar-fill high"
-                            style={{
-                              width: `${
-                                (highExposure /
-                                  maxSeverityExposure) *
-                                100
-                              }%`,
-                            }}
-                          ></div>
+                            {label}
+
+                          </div>
+
+                          <div className="bar-area">
+
+                            <div className="bar-track">
+
+                              <div
+                                className={`bar-fill ${className}`}
+                                style={{
+                                  width: `${
+                                    (value /
+                                      maxSeverityExposure) *
+                                    100
+                                  }%`,
+                                }}
+                              ></div>
+
+                            </div>
+
+                            <strong>
+                              ₹
+                              {formatMoney(
+                                value
+                              )}
+                            </strong>
+
+                          </div>
+
                         </div>
-
-                        <strong>
-                          ₹{formatMoney(highExposure)}
-                        </strong>
-
-                      </div>
-
-                    </div>
-
-                    <div className="chart-row">
-
-                      <div className="chart-row-label">
-                        <span className="chart-dot medium"></span>
-                        Medium
-                      </div>
-
-                      <div className="bar-area">
-
-                        <div className="bar-track">
-                          <div
-                            className="bar-fill medium"
-                            style={{
-                              width: `${
-                                (mediumExposure /
-                                  maxSeverityExposure) *
-                                100
-                              }%`,
-                            }}
-                          ></div>
-                        </div>
-
-                        <strong>
-                          ₹{formatMoney(mediumExposure)}
-                        </strong>
-
-                      </div>
-
-                    </div>
-
-                    <div className="chart-row">
-
-                      <div className="chart-row-label">
-                        <span className="chart-dot low"></span>
-                        Low
-                      </div>
-
-                      <div className="bar-area">
-
-                        <div className="bar-track">
-                          <div
-                            className="bar-fill low"
-                            style={{
-                              width: `${
-                                (lowExposure /
-                                  maxSeverityExposure) *
-                                100
-                              }%`,
-                            }}
-                          ></div>
-                        </div>
-
-                        <strong>
-                          ₹{formatMoney(lowExposure)}
-                        </strong>
-
-                      </div>
-
-                    </div>
+                      )
+                    )}
 
                   </div>
 
@@ -1012,43 +1481,43 @@ function App() {
                         "Duplicate transaction",
                         duplicateCount,
                       ],
-                    ].map(([label, count]) => (
+                    ].map(
+                      ([label, count]) => (
+                        <div
+                          className="type-chart-row"
+                          key={label}
+                        >
 
-                      <div
-                        className="type-chart-row"
-                        key={label}
-                      >
+                          <div className="type-chart-info">
 
-                        <div className="type-chart-info">
+                            <span>
+                              {label}
+                            </span>
 
-                          <span>
-                            {label}
-                          </span>
+                            <strong>
+                              {count}
+                            </strong>
 
-                          <strong>
-                            {count}
-                          </strong>
+                          </div>
+
+                          <div className="type-bar-track">
+
+                            <div
+                              className="type-bar-fill"
+                              style={{
+                                width: `${
+                                  (count /
+                                    maxExceptionTypeCount) *
+                                  100
+                                }%`,
+                              }}
+                            ></div>
+
+                          </div>
 
                         </div>
-
-                        <div className="type-bar-track">
-
-                          <div
-                            className="type-bar-fill"
-                            style={{
-                              width: `${
-                                (count /
-                                  maxExceptionTypeCount) *
-                                100
-                              }%`,
-                            }}
-                          ></div>
-
-                        </div>
-
-                      </div>
-
-                    ))}
+                      )
+                    )}
 
                   </div>
 
@@ -1112,7 +1581,10 @@ function App() {
                 AI RISK SUMMARY
             ================================================= */}
 
-            <section className="ai-section ai-risk-section">
+            <section
+              id="ai-summary"
+              className="ai-section ai-risk-section"
+            >
 
               <div className="ai-section-header">
 
@@ -1163,7 +1635,8 @@ function App() {
 
                   <div
                     className={`ai-risk-level ${
-                      getAIRiskLevel().className
+                      getAIRiskLevel()
+                        .className
                     }`}
                   >
                     {getAIRiskLevel().level}
@@ -1195,7 +1668,8 @@ function App() {
                           width: `${Math.min(
                             Math.max(
                               Number(
-                                result.match_rate || 0
+                                result.match_rate ||
+                                  0
                               ),
                               0
                             ),
@@ -1276,7 +1750,8 @@ function App() {
                     <p>
                       {result.exceptions === 0
                         ? "No corrective action is currently required. Continue monitoring future reconciliation runs."
-                        : getAIRiskLevel().className ===
+                        : getAIRiskLevel()
+                            .className ===
                           "high"
                         ? "Prioritize high-severity exceptions first. Verify settlement records and supporting evidence before making accounting changes."
                         : "Review the identified exceptions, starting with the transactions carrying the highest financial impact."}
@@ -1289,7 +1764,9 @@ function App() {
                 <button
                   className="ai-details-button"
                   onClick={() =>
-                    setAiSummaryOpen(!aiSummaryOpen)
+                    setAiSummaryOpen(
+                      !aiSummaryOpen
+                    )
                   }
                 >
                   {aiSummaryOpen
@@ -1313,7 +1790,8 @@ function App() {
                         </strong>
 
                         <p>
-                          {result.match_rate >= 95
+                          {result.match_rate >=
+                          95
                             ? "Most transactions successfully matched across the financial systems."
                             : "A portion of transactions could not be fully reconciled and should be investigated."}
                         </p>
@@ -1337,7 +1815,8 @@ function App() {
                         <p>
                           {highCount > 0
                             ? `${highCount} high-severity ${
-                                highCount === 1
+                                highCount ===
+                                1
                                   ? "exception requires"
                                   : "exceptions require"
                               } priority review.`
@@ -1365,8 +1844,8 @@ function App() {
                           {formatMoney(
                             result.financial_exposure
                           )}{" "}
-                          is currently associated with
-                          detected exceptions.
+                          is currently associated
+                          with detected exceptions.
                         </p>
 
                       </div>
@@ -1430,7 +1909,10 @@ function App() {
                 PRIORITY EXCEPTIONS
             ================================================= */}
 
-            <section className="exceptions-section">
+            <section
+              id="exceptions"
+              className="exceptions-section"
+            >
 
               <div className="section-header">
 
@@ -1447,6 +1929,7 @@ function App() {
                 </div>
 
                 <div className="exception-count">
+
                   Showing{" "}
                   <strong>
                     {filteredExceptions.length}
@@ -1456,6 +1939,7 @@ function App() {
                     {exceptions.length}
                   </strong>{" "}
                   exceptions
+
                 </div>
 
               </div>
@@ -1466,65 +1950,89 @@ function App() {
 
                 <button
                   className={
-                    severityFilter === "ALL"
+                    severityFilter ===
+                    "ALL"
                       ? "filter-button active"
                       : "filter-button"
                   }
                   onClick={() =>
-                    setSeverityFilter("ALL")
+                    setSeverityFilter(
+                      "ALL"
+                    )
                   }
                 >
                   All
+
                   <span>
-                    {getFilterCount("ALL")}
+                    {getFilterCount(
+                      "ALL"
+                    )}
                   </span>
                 </button>
 
                 <button
                   className={
-                    severityFilter === "HIGH"
+                    severityFilter ===
+                    "HIGH"
                       ? "filter-button high active"
                       : "filter-button high"
                   }
                   onClick={() =>
-                    setSeverityFilter("HIGH")
+                    setSeverityFilter(
+                      "HIGH"
+                    )
                   }
                 >
                   High
+
                   <span>
-                    {getFilterCount("HIGH")}
+                    {getFilterCount(
+                      "HIGH"
+                    )}
                   </span>
                 </button>
 
                 <button
                   className={
-                    severityFilter === "MEDIUM"
+                    severityFilter ===
+                    "MEDIUM"
                       ? "filter-button medium active"
                       : "filter-button medium"
                   }
                   onClick={() =>
-                    setSeverityFilter("MEDIUM")
+                    setSeverityFilter(
+                      "MEDIUM"
+                    )
                   }
                 >
                   Medium
+
                   <span>
-                    {getFilterCount("MEDIUM")}
+                    {getFilterCount(
+                      "MEDIUM"
+                    )}
                   </span>
                 </button>
 
                 <button
                   className={
-                    severityFilter === "LOW"
+                    severityFilter ===
+                    "LOW"
                       ? "filter-button low active"
                       : "filter-button low"
                   }
                   onClick={() =>
-                    setSeverityFilter("LOW")
+                    setSeverityFilter(
+                      "LOW"
+                    )
                   }
                 >
                   Low
+
                   <span>
-                    {getFilterCount("LOW")}
+                    {getFilterCount(
+                      "LOW"
+                    )}
                   </span>
                 </button>
 
@@ -1532,7 +2040,8 @@ function App() {
 
               {/* EMPTY */}
 
-              {filteredExceptions.length === 0 ? (
+              {filteredExceptions.length ===
+              0 ? (
 
                 <div className="all-clear">
 
@@ -1557,101 +2066,133 @@ function App() {
 
                   {filteredExceptions
                     .slice(0, 8)
-                    .map((exception, index) => (
+                    .map(
+                      (
+                        exception,
+                        index
+                      ) => (
 
-                      <div
-                        className="exception-row"
-                        key={`${exception.transaction_id}-${index}`}
-                        onClick={() =>
-                          setSelectedException(exception)
-                        }
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(event) => {
-
-                          if (
-                            event.key === "Enter" ||
-                            event.key === " "
-                          ) {
-                            event.preventDefault();
-
+                        <div
+                          className="exception-row"
+                          key={`${exception.transaction_id}-${index}`}
+                          onClick={() =>
                             setSelectedException(
                               exception
-                            );
+                            )
                           }
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(
+                            event
+                          ) => {
 
-                        }}
-                      >
-
-                        <div className="exception-left">
-
-                          <div
-                            className={`severity-dot ${getSeverityClass(
-                              exception.severity
-                            )}`}
-                          ></div>
-
-                          <div className="exception-main">
-
-                            <div className="transaction-id">
-                              {exception.transaction_id}
-                            </div>
-
-                            <div className="exception-type">
-                              {exception.type?.replaceAll(
-                                "_",
+                            if (
+                              event.key ===
+                                "Enter" ||
+                              event.key ===
                                 " "
+                            ) {
+
+                              event.preventDefault();
+
+                              setSelectedException(
+                                exception
+                              );
+
+                            }
+
+                          }}
+                        >
+
+                          <div className="exception-left">
+
+                            <div
+                              className={`severity-dot ${getSeverityClass(
+                                exception.severity
+                              )}`}
+                            ></div>
+
+                            <div className="exception-main">
+
+                              <div className="transaction-id">
+                                {
+                                  exception.transaction_id
+                                }
+                              </div>
+
+                              <div className="exception-type">
+                                {exception.type?.replaceAll(
+                                  "_",
+                                  " "
+                                )}
+                              </div>
+
+                              <div className="exception-reason">
+                                {
+                                  exception.reason
+                                }
+                              </div>
+
+                            </div>
+
+                          </div>
+
+                          <div className="exception-right">
+
+                            <div
+                              className={`severity-label ${getSeverityClass(
+                                exception.severity
+                              )}`}
+                            >
+                              {
+                                exception.severity
+                              }
+                            </div>
+
+                            <strong>
+                              ₹
+                              {formatMoney(
+                                exception.financial_impact
                               )}
-                            </div>
+                            </strong>
 
-                            <div className="exception-reason">
-                              {exception.reason}
-                            </div>
+                            <span>
+                              {
+                                exception.confidence
+                              }%
+                              confidence
+                            </span>
 
                           </div>
 
                         </div>
 
-                        <div className="exception-right">
-
-                          <div
-                            className={`severity-label ${getSeverityClass(
-                              exception.severity
-                            )}`}
-                          >
-                            {exception.severity}
-                          </div>
-
-                          <strong>
-                            ₹
-                            {formatMoney(
-                              exception.financial_impact
-                            )}
-                          </strong>
-
-                          <span>
-                            {exception.confidence}% confidence
-                          </span>
-
-                        </div>
-
-                      </div>
-
-                    ))}
+                      )
+                    )}
 
                 </div>
 
               )}
 
-              {filteredExceptions.length > 8 && (
+              {filteredExceptions.length >
+                8 && (
+
                 <div className="exception-footer">
+
                   Showing the first{" "}
-                  <strong>8</strong> of{" "}
                   <strong>
-                    {filteredExceptions.length}
+                    8
+                  </strong>{" "}
+                  of{" "}
+                  <strong>
+                    {
+                      filteredExceptions.length
+                    }
                   </strong>{" "}
                   matching exceptions.
+
                 </div>
+
               )}
 
             </section>
@@ -1670,7 +2211,9 @@ function App() {
                     event.target ===
                     event.currentTarget
                   ) {
-                    setSelectedException(null);
+                    setSelectedException(
+                      null
+                    );
                   }
 
                 }}
@@ -1695,7 +2238,9 @@ function App() {
                     <button
                       className="close-investigator"
                       onClick={() =>
-                        setSelectedException(null)
+                        setSelectedException(
+                          null
+                        )
                       }
                       aria-label="Close investigator"
                     >
@@ -1711,7 +2256,9 @@ function App() {
                     </span>
 
                     <strong>
-                      {selectedException.transaction_id}
+                      {
+                        selectedException.transaction_id
+                      }
                     </strong>
 
                   </div>
@@ -1729,7 +2276,9 @@ function App() {
                           selectedException.severity
                         )}`}
                       >
-                        {selectedException.severity}
+                        {
+                          selectedException.severity
+                        }
                       </strong>
 
                     </div>
@@ -1756,7 +2305,9 @@ function App() {
                       </span>
 
                       <strong>
-                        {selectedException.confidence}%
+                        {
+                          selectedException.confidence
+                        }%
                       </strong>
 
                     </div>
@@ -1770,7 +2321,9 @@ function App() {
                     </div>
 
                     <p>
-                      {selectedException.reason}
+                      {
+                        selectedException.reason
+                      }
                     </p>
 
                   </div>
@@ -1787,32 +2340,36 @@ function App() {
 
                         Object.entries(
                           selectedException.evidence
-                        ).map(([key, value]) => (
+                        ).map(
+                          ([key, value]) => (
 
-                          <div
-                            className="evidence-item"
-                            key={key}
-                          >
+                            <div
+                              className="evidence-item"
+                              key={key}
+                            >
 
-                            <span>
-                              {key.replaceAll(
-                                "_",
-                                " "
-                              )}
-                            </span>
+                              <span>
+                                {key.replaceAll(
+                                  "_",
+                                  " "
+                                )}
+                              </span>
 
-                            <strong>
-                              {typeof value ===
-                              "boolean"
-                                ? value
-                                  ? "Yes"
-                                  : "No"
-                                : String(value)}
-                            </strong>
+                              <strong>
+                                {typeof value ===
+                                "boolean"
+                                  ? value
+                                    ? "Yes"
+                                    : "No"
+                                  : String(
+                                      value
+                                    )}
+                              </strong>
 
-                          </div>
+                            </div>
 
-                        ))
+                          )
+                        )
 
                       ) : (
 
@@ -1835,7 +2392,9 @@ function App() {
                       </div>
 
                       <strong>
-                        {selectedException.confidence}%
+                        {
+                          selectedException.confidence
+                        }%
                       </strong>
 
                     </div>
@@ -1875,8 +2434,10 @@ function App() {
                       </div>
 
                       <p>
-                        {selectedException.recommendation ||
-                          "Review this transaction manually before taking action."}
+                        {
+                          selectedException.recommendation ||
+                          "Review this transaction manually before taking action."
+                        }
                       </p>
 
                     </div>
@@ -1916,6 +2477,194 @@ function App() {
         )}
 
       </main>
+
+      {/* =================================================
+          INSTRUCTIONS SIDE PANEL
+      ================================================= */}
+
+      {instructionsOpen && (
+        <div className="instructions-backdrop">
+
+          <aside
+            ref={instructionsRef}
+            className="instructions-panel"
+          >
+
+            <div className="instructions-header">
+
+              <div>
+
+                <div className="eyebrow">
+                  JUICE DATA GUIDE
+                </div>
+
+                <h2>
+                  Upload instructions
+                </h2>
+
+                <p>
+                  Prepare your financial data
+                  before sending it to JUICE.
+                </p>
+
+              </div>
+
+              <button
+                className="close-instructions"
+                onClick={() =>
+                  setInstructionsOpen(
+                    false
+                  )
+                }
+                aria-label="Close instructions"
+              >
+                ×
+              </button>
+
+            </div>
+
+            <div className="instruction-step">
+
+              <span>01</span>
+
+              <div>
+
+                <strong>
+                  Choose your file
+                </strong>
+
+                <p>
+                  Upload a CSV, XLS, or XLSX
+                  financial dataset.
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="instruction-step">
+
+              <span>02</span>
+
+              <div>
+
+                <strong>
+                  Keep transaction records structured
+                </strong>
+
+                <p>
+                  Use columns such as transaction
+                  ID, amount, date, reference,
+                  settlement and source values where
+                  available.
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="instruction-step">
+
+              <span>03</span>
+
+              <div>
+
+                <strong>
+                  JUICE preprocesses the file
+                </strong>
+
+                <p>
+                  The Python pipeline validates the
+                  uploaded data, removes duplicate
+                  records, handles missing values and
+                  standardizes fields.
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="instruction-step">
+
+              <span>04</span>
+
+              <div>
+
+                <strong>
+                  Reconciliation begins
+                </strong>
+
+                <p>
+                  Cleaned records are passed to the
+                  JUICE reconciliation engine for
+                  matching and exception detection.
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="instruction-step">
+
+              <span>05</span>
+
+              <div>
+
+                <strong>
+                  Review the results
+                </strong>
+
+                <p>
+                  JUICE generates metrics, financial
+                  exposure, risk insights, charts and
+                  explainable exceptions.
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="instructions-note">
+
+              <span>🛡</span>
+
+              <div>
+
+                <strong>
+                  Data safety
+                </strong>
+
+                <p>
+                  Do not upload real customer
+                  financial information while testing.
+                  Use synthetic or appropriately
+                  anonymized datasets.
+                </p>
+
+              </div>
+
+            </div>
+
+            <button
+              className="instructions-upload-button"
+              onClick={() => {
+                setInstructionsOpen(
+                  false
+                );
+
+                setTimeout(
+                  openFilePicker,
+                  200
+                );
+              }}
+            >
+              ↑ Choose a file
+            </button>
+
+          </aside>
+
+        </div>
+      )}
 
     </div>
   );
