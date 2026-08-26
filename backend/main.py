@@ -1,9 +1,16 @@
 from pathlib import Path
-import tempfile
 import shutil
 import uuid
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+import pandas as pd
+
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    HTTPException,
+)
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -43,12 +50,33 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-DATA_DIR = BASE_DIR / "data" / "raw"
-UPLOAD_DIR = BASE_DIR / "data" / "uploads"
-REPORT_DIR = BASE_DIR / "data" / "reports"
+DATA_DIR = (
+    BASE_DIR
+    / "data"
+    / "raw"
+)
 
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-REPORT_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_DIR = (
+    BASE_DIR
+    / "data"
+    / "uploads"
+)
+
+REPORT_DIR = (
+    BASE_DIR
+    / "data"
+    / "reports"
+)
+
+UPLOAD_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+REPORT_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
 
 
 # ============================================================
@@ -57,19 +85,24 @@ REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 @app.get("/")
 def root():
+
     return {
         "message": "Welcome to JUICE",
         "status": "online",
-        "service": "Joint Unified Intelligence for Commerce & Expenses",
+        "service": (
+            "Joint Unified Intelligence "
+            "for Commerce & Expenses"
+        ),
     }
 
 
 # ============================================================
-# HEALTH CHECK
+# HEALTH
 # ============================================================
 
 @app.get("/health")
 def health_check():
+
     return {
         "status": "healthy",
         "service": "JUICE Backend",
@@ -77,45 +110,49 @@ def health_check():
 
 
 # ============================================================
-# EXISTING RECONCILIATION
+# NORMAL RECONCILIATION
 # ============================================================
 
 @app.post("/reconcile")
 def run_reconciliation():
 
-    razorpay_file = DATA_DIR / "razorpay.csv"
-    bank_file = DATA_DIR / "bank.csv"
-    ledger_file = DATA_DIR / "ledger.csv"
+    razorpay_file = (
+        DATA_DIR
+        / "razorpay.csv"
+    )
 
-    # --------------------------------------------------------
-    # Make sure the synthetic files exist
-    # --------------------------------------------------------
+    bank_file = (
+        DATA_DIR
+        / "bank.csv"
+    )
+
+    ledger_file = (
+        DATA_DIR
+        / "ledger.csv"
+    )
 
     if not razorpay_file.exists():
+
         raise HTTPException(
             status_code=404,
-            detail=f"Razorpay file not found: {razorpay_file}",
+            detail="Razorpay file not found.",
         )
 
     if not bank_file.exists():
+
         raise HTTPException(
             status_code=404,
-            detail=f"Bank file not found: {bank_file}",
+            detail="Bank file not found.",
         )
 
     if not ledger_file.exists():
+
         raise HTTPException(
             status_code=404,
-            detail=f"Ledger file not found: {ledger_file}",
+            detail="Ledger file not found.",
         )
 
     try:
-
-        # IMPORTANT:
-        # This is where your existing exception-generation
-        # logic happens.
-        #
-        # Do NOT replace this with custom calculations here.
 
         result = reconcile(
             razorpay_file,
@@ -123,172 +160,617 @@ def run_reconciliation():
             ledger_file,
         )
 
-        # Return the complete reconciliation result
-        # including exception_details.
         return result
 
     except Exception as exc:
 
-        print("========================================")
-        print("RECONCILIATION ERROR")
-        print("========================================")
-        print(exc)
-        print("========================================")
+        print(
+            "RECONCILIATION ERROR:",
+            repr(exc),
+        )
 
         raise HTTPException(
             status_code=500,
-            detail=f"Reconciliation failed: {str(exc)}",
+            detail=(
+                "Reconciliation failed: "
+                f"{str(exc)}"
+            ),
         )
 
 
 # ============================================================
-# FILE UPLOAD
+# FILE READING
+# ============================================================
+
+def read_financial_file(
+    file_path: Path,
+):
+    """
+    Read CSV, XLS or XLSX.
+    """
+
+    extension = (
+        file_path
+        .suffix
+        .lower()
+    )
+
+    if extension == ".csv":
+
+        return pd.read_csv(
+            file_path
+        )
+
+    if extension in [".xls", ".xlsx"]:
+
+        return pd.read_excel(
+            file_path
+        )
+
+    raise ValueError(
+        "Unsupported file format."
+    )
+
+
+# ============================================================
+# PREPROCESSING
+# ============================================================
+
+def preprocess_dataframe(
+    dataframe: pd.DataFrame,
+):
+    """
+    Clean a financial dataframe.
+
+    Steps:
+
+    1. Remove completely empty rows.
+    2. Remove completely empty columns.
+    3. Normalize column names.
+    4. Remove whitespace.
+    5. Remove duplicate rows.
+    6. Fill missing values.
+    """
+
+    df = dataframe.copy()
+
+    original_rows = len(df)
+
+    # --------------------------------------------------------
+    # Normalize column names
+    # --------------------------------------------------------
+
+    df.columns = [
+        str(column)
+        .strip()
+        .lower()
+        .replace(" ", "_")
+        .replace("-", "_")
+        for column in df.columns
+    ]
+
+    # --------------------------------------------------------
+    # Remove empty rows
+    # --------------------------------------------------------
+
+    df = df.dropna(
+        axis=0,
+        how="all",
+    )
+
+    # --------------------------------------------------------
+    # Remove empty columns
+    # --------------------------------------------------------
+
+    df = df.dropna(
+        axis=1,
+        how="all",
+    )
+
+    # --------------------------------------------------------
+    # Clean text
+    # --------------------------------------------------------
+
+    for column in df.columns:
+
+        if df[column].dtype == "object":
+
+            df[column] = (
+                df[column]
+                .apply(
+                    lambda value:
+                    value.strip()
+                    if isinstance(
+                        value,
+                        str,
+                    )
+                    else value
+                )
+            )
+
+    # --------------------------------------------------------
+    # Remove duplicates
+    # --------------------------------------------------------
+
+    before_duplicates = len(df)
+
+    df = df.drop_duplicates()
+
+    duplicates_removed = (
+        before_duplicates
+        - len(df)
+    )
+
+    # --------------------------------------------------------
+    # Fill missing values
+    # --------------------------------------------------------
+
+    missing_before = int(
+        df.isna()
+        .sum()
+        .sum()
+    )
+
+    for column in df.columns:
+
+        if pd.api.types.is_numeric_dtype(
+            df[column]
+        ):
+
+            df[column] = (
+                df[column]
+                .fillna(0)
+            )
+
+        else:
+
+            df[column] = (
+                df[column]
+                .fillna("UNKNOWN")
+            )
+
+    missing_after = int(
+        df.isna()
+        .sum()
+        .sum()
+    )
+
+    return (
+        df,
+        {
+            "original_rows": original_rows,
+            "cleaned_rows": len(df),
+            "duplicates_removed": (
+                duplicates_removed
+            ),
+            "missing_values_before": (
+                missing_before
+            ),
+            "missing_values_after": (
+                missing_after
+            ),
+        },
+    )
+
+
+# ============================================================
+# SAVE PROCESSED FILE
+# ============================================================
+
+def save_processed_file(
+    dataframe: pd.DataFrame,
+    output_path: Path,
+):
+
+    dataframe.to_csv(
+        output_path,
+        index=False,
+    )
+
+
+# ============================================================
+# VALIDATE UPLOAD
+# ============================================================
+
+def validate_upload(
+    uploaded_file: UploadFile,
+    label: str,
+):
+
+    if not uploaded_file:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{label} was not uploaded."
+            ),
+        )
+
+    if not uploaded_file.filename:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No {label} file was selected."
+            ),
+        )
+
+    extension = (
+        Path(
+            uploaded_file.filename
+        )
+        .suffix
+        .lower()
+    )
+
+    allowed = {
+        ".csv",
+        ".xls",
+        ".xlsx",
+    }
+
+    if extension not in allowed:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{label} must be "
+                "CSV, XLS, or XLSX."
+            ),
+        )
+
+
+# ============================================================
+# SAVE UPLOAD
+# ============================================================
+
+async def save_upload(
+    uploaded_file: UploadFile,
+    destination: Path,
+):
+
+    with destination.open("wb") as buffer:
+
+        shutil.copyfileobj(
+            uploaded_file.file,
+            buffer,
+        )
+
+
+# ============================================================
+# UPLOAD + PREPROCESS + RECONCILE
 # ============================================================
 
 @app.post("/upload-reconcile")
 async def upload_and_reconcile(
-    file: UploadFile = File(...)
+
+    razorpay_file: UploadFile = File(...),
+
+    bank_file: UploadFile = File(...),
+
+    ledger_file: UploadFile = File(...),
+
 ):
 
     # --------------------------------------------------------
-    # Validate file
+    # Validate all three files
     # --------------------------------------------------------
 
-    if not file.filename:
-        raise HTTPException(
-            status_code=400,
-            detail="No file was selected.",
-        )
-
-    filename = file.filename.lower()
-
-    allowed_extensions = (
-        ".csv",
-        ".xls",
-        ".xlsx",
+    validate_upload(
+        razorpay_file,
+        "Razorpay file",
     )
 
-    if not filename.endswith(allowed_extensions):
-        raise HTTPException(
-            status_code=400,
-            detail="Only CSV, XLS, and XLSX files are supported.",
-        )
+    validate_upload(
+        bank_file,
+        "Bank file",
+    )
+
+    validate_upload(
+        ledger_file,
+        "Ledger file",
+    )
 
     # --------------------------------------------------------
-    # Create temporary upload directory
+    # Unique upload folder
     # --------------------------------------------------------
 
-    upload_id = str(uuid.uuid4())
+    upload_id = uuid.uuid4().hex
 
-    upload_path = UPLOAD_DIR / f"{upload_id}_{file.filename}"
+    upload_folder = (
+        UPLOAD_DIR
+        / upload_id
+    )
+
+    upload_folder.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    processed_folder = (
+        upload_folder
+        / "processed"
+    )
+
+    processed_folder.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     try:
 
-        # ----------------------------------------------------
-        # Save uploaded file
-        # ----------------------------------------------------
+        # ====================================================
+        # SAVE ORIGINAL FILES
+        # ====================================================
 
-        with open(upload_path, "wb") as buffer:
-            shutil.copyfileobj(
-                file.file,
-                buffer,
+        razorpay_original = (
+            upload_folder
+            / (
+                "razorpay_original"
+                + Path(
+                    razorpay_file.filename
+                ).suffix.lower()
             )
+        )
 
-        print("========================================")
-        print("FILE UPLOADED")
-        print(f"File: {file.filename}")
-        print(f"Path: {upload_path}")
-        print("========================================")
-
-        # ----------------------------------------------------
-        # Import preprocessing pipeline
-        # ----------------------------------------------------
-        #
-        # If you already have a preprocessing module, this
-        # will use it.
-        #
-        # Expected function:
-        #
-        # preprocess_file(input_file, output_file)
-        #
-        # If you haven't created it yet, the upload endpoint
-        # will return a clear message rather than crashing
-        # the entire application.
-        # ----------------------------------------------------
-
-        try:
-
-            from backend.preprocessing import preprocess_file
-
-            cleaned_dir = UPLOAD_DIR / "cleaned"
-            cleaned_dir.mkdir(
-                parents=True,
-                exist_ok=True,
+        bank_original = (
+            upload_folder
+            / (
+                "bank_original"
+                + Path(
+                    bank_file.filename
+                ).suffix.lower()
             )
+        )
 
-            cleaned_path = (
-                cleaned_dir
-                / f"{upload_id}_cleaned.csv"
+        ledger_original = (
+            upload_folder
+            / (
+                "ledger_original"
+                + Path(
+                    ledger_file.filename
+                ).suffix.lower()
             )
+        )
 
-            preprocess_file(
-                upload_path,
-                cleaned_path,
-            )
+        await save_upload(
+            razorpay_file,
+            razorpay_original,
+        )
 
-            processed_file = cleaned_path
+        await save_upload(
+            bank_file,
+            bank_original,
+        )
 
-        except ImportError:
+        await save_upload(
+            ledger_file,
+            ledger_original,
+        )
 
-            # ------------------------------------------------
-            # Fallback:
-            # Keep the uploaded file if preprocessing module
-            # does not exist yet.
-            # ------------------------------------------------
+        print(
+            "========================================"
+        )
 
-            print(
-                "WARNING: backend.preprocessing "
-                "was not found."
-            )
+        print(
+            "THREE FILES UPLOADED"
+        )
 
-            processed_file = upload_path
+        print(
+            "Razorpay:",
+            razorpay_file.filename,
+        )
 
-        # ----------------------------------------------------
-        # IMPORTANT
-        #
-        # Your current reconcile() expects three files:
-        #
-        # razorpay
-        # bank
-        # ledger
-        #
-        # Therefore a single uploaded file cannot magically
-        # replace all three unless the preprocessing pipeline
-        # determines what type of file it is.
-        #
-        # For now we return the processed file information.
-        # ----------------------------------------------------
+        print(
+            "Bank:",
+            bank_file.filename,
+        )
 
-        return {
-            "success": True,
-            "message": "File uploaded and preprocessing completed.",
-            "filename": file.filename,
-            "original_file": str(upload_path),
-            "processed_file": str(processed_file),
-            "upload_id": upload_id,
+        print(
+            "Ledger:",
+            ledger_file.filename,
+        )
+
+        print(
+            "========================================"
+        )
+
+        # ====================================================
+        # READ FILES
+        # ====================================================
+
+        razorpay_df = read_financial_file(
+            razorpay_original
+        )
+
+        bank_df = read_financial_file(
+            bank_original
+        )
+
+        ledger_df = read_financial_file(
+            ledger_original
+        )
+
+        # ====================================================
+        # PREPROCESS
+        # ====================================================
+
+        (
+            razorpay_clean,
+            razorpay_stats,
+        ) = preprocess_dataframe(
+            razorpay_df
+        )
+
+        (
+            bank_clean,
+            bank_stats,
+        ) = preprocess_dataframe(
+            bank_df
+        )
+
+        (
+            ledger_clean,
+            ledger_stats,
+        ) = preprocess_dataframe(
+            ledger_df
+        )
+
+        # ====================================================
+        # SAVE CLEAN FILES
+        # ====================================================
+
+        processed_razorpay = (
+            processed_folder
+            / "razorpay.csv"
+        )
+
+        processed_bank = (
+            processed_folder
+            / "bank.csv"
+        )
+
+        processed_ledger = (
+            processed_folder
+            / "ledger.csv"
+        )
+
+        save_processed_file(
+            razorpay_clean,
+            processed_razorpay,
+        )
+
+        save_processed_file(
+            bank_clean,
+            processed_bank,
+        )
+
+        save_processed_file(
+            ledger_clean,
+            processed_ledger,
+        )
+
+        print(
+            "========================================"
+        )
+
+        print(
+            "PREPROCESSING COMPLETE"
+        )
+
+        print(
+            "Razorpay:",
+            razorpay_stats,
+        )
+
+        print(
+            "Bank:",
+            bank_stats,
+        )
+
+        print(
+            "Ledger:",
+            ledger_stats,
+        )
+
+        print(
+            "========================================"
+        )
+
+        # ====================================================
+        # RECONCILIATION
+        # ====================================================
+
+        result = reconcile(
+            processed_razorpay,
+            processed_bank,
+            processed_ledger,
+        )
+
+        # ====================================================
+        # ADD PREPROCESSING INFORMATION
+        # ====================================================
+
+        result["upload_id"] = (
+            upload_id
+        )
+
+        result["source"] = (
+            "user_uploaded_files"
+        )
+
+        result["preprocessing"] = {
+
+            "status": "completed",
+
+            "files_processed": 3,
+
+            "razorpay": razorpay_stats,
+
+            "bank": bank_stats,
+
+            "ledger": ledger_stats,
+
         }
+
+        print(
+            "========================================"
+        )
+
+        print(
+            "RECONCILIATION COMPLETE"
+        )
+
+        print(
+            "Exceptions:",
+            result.get(
+                "exceptions",
+                0,
+            ),
+        )
+
+        print(
+            "Financial exposure:",
+            result.get(
+                "financial_exposure",
+                0,
+            ),
+        )
+
+        print(
+            "========================================"
+        )
+
+        return result
+
+    except HTTPException:
+        raise
 
     except Exception as exc:
 
-        print("========================================")
-        print("UPLOAD ERROR")
-        print("========================================")
-        print(exc)
-        print("========================================")
+        print(
+            "========================================"
+        )
+
+        print(
+            "UPLOAD / PROCESSING ERROR"
+        )
+
+        print(
+            repr(exc)
+        )
+
+        print(
+            "========================================"
+        )
 
         raise HTTPException(
             status_code=500,
-            detail=f"File processing failed: {str(exc)}",
+            detail=(
+                "JUICE could not process "
+                "the uploaded files: "
+                f"{str(exc)}"
+            ),
         )
 
 
@@ -297,35 +779,37 @@ async def upload_and_reconcile(
 # ============================================================
 
 @app.post("/generate-report")
-def generate_report(report_data: dict):
+def generate_report(
+    report_data: dict,
+):
 
     try:
 
-        from backend.report_generator import generate_finance_report
+        from backend.report_generator import (
+            generate_finance_report
+        )
 
     except ImportError:
 
         raise HTTPException(
             status_code=500,
             detail=(
-                "Report generator is not configured. "
-                "Create backend/report_generator.py "
-                "with generate_finance_report()."
+                "Report generator is not "
+                "configured."
             ),
         )
 
     try:
 
-        report_id = str(uuid.uuid4())
+        report_id = uuid.uuid4().hex
 
         report_path = (
             REPORT_DIR
-            / f"JUICE_Finance_Report_{report_id}.pdf"
+            / (
+                "JUICE_Finance_Report_"
+                f"{report_id}.pdf"
+            )
         )
-
-        # ----------------------------------------------------
-        # Generate PDF
-        # ----------------------------------------------------
 
         generate_finance_report(
             report_data,
@@ -336,13 +820,17 @@ def generate_report(report_data: dict):
 
             raise HTTPException(
                 status_code=500,
-                detail="PDF report was not created.",
+                detail=(
+                    "PDF report was not created."
+                ),
             )
 
         return FileResponse(
             path=report_path,
             media_type="application/pdf",
-            filename="JUICE_Finance_Report.pdf",
+            filename=(
+                "JUICE_Finance_Report.pdf"
+            ),
         )
 
     except HTTPException:
@@ -350,20 +838,22 @@ def generate_report(report_data: dict):
 
     except Exception as exc:
 
-        print("========================================")
-        print("REPORT GENERATION ERROR")
-        print("========================================")
-        print(exc)
-        print("========================================")
+        print(
+            "REPORT GENERATION ERROR:",
+            repr(exc),
+        )
 
         raise HTTPException(
             status_code=500,
-            detail=f"Could not generate PDF report: {str(exc)}",
+            detail=(
+                "Could not generate "
+                f"PDF report: {str(exc)}"
+            ),
         )
 
 
 # ============================================================
-# SERVER INFORMATION
+# STATUS
 # ============================================================
 
 @app.get("/api/status")

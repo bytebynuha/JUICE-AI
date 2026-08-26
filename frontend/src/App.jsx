@@ -8,6 +8,7 @@ function App() {
   const [reportLoading, setReportLoading] = useState(false);
   const [error, setError] = useState("");
   const [uploadStatus, setUploadStatus] = useState("");
+  
 
   // Investigator
   const [selectedException, setSelectedException] = useState(null);
@@ -186,34 +187,85 @@ function App() {
   };
 
   const handleFileChange = async (event) => {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files || []);
 
-    if (!file) {
+    if (!files.length) {
       return;
     }
 
-    await uploadAndReconcile(file);
+    await uploadAndReconcile(files);
 
-    // Allows the same file to be selected again later
+    // Allows the same files to be selected again later
     event.target.value = "";
   };
 
-  const uploadAndReconcile = async (file) => {
+  const uploadAndReconcile = async (files) => {
     const allowedExtensions = [
       ".csv",
       ".xls",
       ".xlsx",
     ];
 
-    const fileName = file.name.toLowerCase();
-
-    const isValidFile = allowedExtensions.some(
-      (extension) => fileName.endsWith(extension)
-    );
-
-    if (!isValidFile) {
+    if (files.length !== 3) {
       setError(
-        "Unsupported file format. Please upload CSV, XLS, or XLSX."
+        "Please select exactly 3 files: Razorpay, Bank, and Ledger."
+      );
+      return;
+    }
+
+    const invalidFile = files.find((file) => {
+      const fileName = file.name.toLowerCase();
+      return !allowedExtensions.some((extension) =>
+        fileName.endsWith(extension)
+      );
+    });
+
+    if (invalidFile) {
+      setError(
+        `Unsupported file format: ${invalidFile.name}. Please upload only CSV, XLS, or XLSX files.`
+      );
+      return;
+    }
+
+    // Identify the three financial sources from their filenames.
+    // If filenames do not contain the source names, the selected
+    // order is used: Razorpay, Bank, Ledger.
+    const findFile = (keywords) =>
+      files.find((file) => {
+        const name = file.name.toLowerCase();
+        return keywords.some((keyword) =>
+          name.includes(keyword)
+        );
+      });
+
+    const razorpayFile =
+      findFile(["razorpay", "razor", "payment"]) ||
+      files[0];
+
+    const bankFile =
+      findFile(["bank", "statement"]) ||
+      files.find((file) => file !== razorpayFile) ||
+      files[1];
+
+    const ledgerFile =
+      findFile(["ledger", "accounting", "accounts"]) ||
+      files.find(
+        (file) =>
+          file !== razorpayFile &&
+          file !== bankFile
+      ) ||
+      files[2];
+
+    // Make sure one physical file is not assigned to two sources.
+    const selectedFiles = [
+      razorpayFile,
+      bankFile,
+      ledgerFile,
+    ];
+
+    if (new Set(selectedFiles).size !== 3) {
+      setError(
+        "JUICE could not identify the three source files. Please select them in this order: Razorpay, Bank, Ledger."
       );
       return;
     }
@@ -222,13 +274,19 @@ function App() {
     setLoading(false);
     setError("");
     setUploadStatus(
-      `Uploading ${file.name} and preparing your data...`
+      "Uploading Razorpay, bank, and ledger files from your PC..."
     );
 
     try {
       const formData = new FormData();
 
-      formData.append("file", file);
+      formData.append("razorpay_file", razorpayFile);
+      formData.append("bank_file", bankFile);
+      formData.append("ledger_file", ledgerFile);
+
+      setUploadStatus(
+        "Files uploaded. Cleaning and preprocessing your financial data..."
+      );
 
       const response = await fetch(
         "http://127.0.0.1:8000/upload-reconcile",
@@ -239,13 +297,23 @@ function App() {
       );
 
       if (!response.ok) {
-        throw new Error(
-          "Upload or preprocessing failed."
-        );
+        let errorMessage =
+          "Upload or preprocessing failed.";
+
+        try {
+          const errorData = await response.json();
+          errorMessage =
+            errorData.detail || errorMessage;
+        } catch {
+          // Keep the default error message if the backend
+          // does not return JSON.
+        }
+
+        throw new Error(errorMessage);
       }
 
       setUploadStatus(
-        "File uploaded. Cleaning and preprocessing financial records..."
+        "Data cleaned successfully. JUICE is reconciling your financial records..."
       );
 
       const data = await response.json();
@@ -256,7 +324,7 @@ function App() {
       setAiSummaryOpen(false);
 
       setUploadStatus(
-        `✓ ${file.name} processed successfully.`
+        "✓ Your financial files were processed successfully."
       );
 
       setTimeout(() => {
@@ -264,10 +332,11 @@ function App() {
         scrollToSection("overview");
       }, 1800);
     } catch (err) {
-      console.error(err);
+      console.error("UPLOAD ERROR:", err);
 
       setError(
-        "JUICE could not process this file. Check that the backend is running and the file contains valid financial data."
+        err?.message ||
+          "JUICE could not process your financial files. Check that the backend is running and that your files contain valid financial data."
       );
 
       setUploadStatus("");
@@ -651,6 +720,7 @@ function App() {
         ref={fileInputRef}
         type="file"
         accept=".csv,.xls,.xlsx"
+        multiple
         onChange={handleFileChange}
         className="hidden-file-input"
       />
@@ -2658,7 +2728,7 @@ function App() {
                 );
               }}
             >
-              ↑ Choose a file
+              ↑ Choose 3 files
             </button>
 
           </aside>
