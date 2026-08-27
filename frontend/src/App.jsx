@@ -5,10 +5,14 @@ function App() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [selectedFiles, setSelectedFiles] = useState([]);
   const [reportLoading, setReportLoading] = useState(false);
   const [error, setError] = useState("");
   const [uploadStatus, setUploadStatus] = useState("");
+
+  // Upload history
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   
 
   // Investigator
@@ -136,23 +140,45 @@ function App() {
   };
 
   // =====================================================
-  // RUN RECONCILIATION
+  // RUN NORMAL RECONCILIATION
   // =====================================================
 
   const runReconciliation = async () => {
-    if (!selectedFiles || selectedFiles.length !== 3) {
+    setLoading(true);
+    setError("");
+    setUploadStatus("");
+
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8000/reconcile",
+        {
+          method: "POST",
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Reconciliation failed.");
+      }
+
+      const data = await response.json();
+
+      setResult(data);
+      setSeverityFilter("ALL");
+      setSelectedException(null);
+      setAiSummaryOpen(false);
+
+      setTimeout(() => {
+        scrollToSection("overview");
+      }, 100);
+    } catch (err) {
+      console.error(err);
+
       setError(
-        "Please upload your Razorpay, Bank, and Ledger files first."
+        "JUICE couldn't connect to the financial engine. Make sure the backend is running."
       );
-
-      setUploadStatus(
-        "Upload your three financial files, then click Start Reconciliation."
-      );
-
-      return;
+    } finally {
+      setLoading(false);
     }
-
-    await uploadAndReconcile(selectedFiles);
   };
 
   // =====================================================
@@ -165,83 +191,79 @@ function App() {
     }
   };
 
-  const handleFileChange = (event) => {
-    const files = Array.from(event.target.files || []);
+  const handleFileChange = async (event) => {
+    const selectedFiles = Array.from(
+      event.target.files || []
+    );
 
-    if (!files.length) {
+    if (selectedFiles.length === 0) {
       return;
     }
 
+    await uploadAndReconcile(selectedFiles);
+
+    // Allows the same files to be selected again later
+    event.target.value = "";
+  };
+
+  const uploadAndReconcile = async (selectedFiles) => {
     const allowedExtensions = [
       ".csv",
       ".xls",
       ".xlsx",
     ];
 
-    // User must select exactly three files.
-    if (files.length !== 3) {
+    if (selectedFiles.length !== 3) {
       setError(
-        "Please select exactly 3 files: Razorpay, Bank, and Ledger."
+        "Please select exactly 3 files: Razorpay, bank, and ledger data."
       );
-
       setUploadStatus(
         "Choose your three financial files together."
       );
-
-      event.target.value = "";
       return;
     }
 
-    // Check file types before saving them.
-    const invalidFile = files.find((file) => {
-      const fileName = file.name.toLowerCase();
-
-      return !allowedExtensions.some((extension) =>
-        fileName.endsWith(extension)
-      );
-    });
+    const invalidFile = selectedFiles.find(
+      (file) =>
+        !allowedExtensions.some((extension) =>
+          file.name.toLowerCase().endsWith(extension)
+        )
+    );
 
     if (invalidFile) {
       setError(
-        `Unsupported file format: ${invalidFile.name}. Please upload only CSV, XLS, or XLSX files.`
+        `Unsupported file format: ${invalidFile.name}. Please use CSV, XLS, or XLSX.`
       );
-
-      setUploadStatus("");
-      event.target.value = "";
       return;
     }
 
-    // Identify files by their names.
+    // Try to identify files from their names. If the names do not contain
+    // recognizable words, keep the user's selection order: Razorpay, Bank, Ledger.
     const findFile = (keywords) =>
-      files.find((file) => {
-        const name = file.name.toLowerCase();
+      selectedFiles.find((file) =>
+        keywords.some((keyword) =>
+          file.name.toLowerCase().includes(keyword)
+        )
+      );
 
-        return keywords.some((keyword) =>
-          name.includes(keyword)
-        );
-      });
+    const razorpayFile = findFile([
+      "razorpay",
+      "razor",
+      "payment",
+      "payments",
+    ]);
 
-    const razorpayFile =
-      findFile([
-        "razorpay",
-        "razor",
-        "payment",
-        "payments",
-      ]);
+    const bankFile = findFile([
+      "bank",
+      "statement",
+      "bankstatement",
+    ]);
 
-    const bankFile =
-      findFile([
-        "bank",
-        "statement",
-        "bankstatement",
-      ]);
-
-    const ledgerFile =
-      findFile([
-        "ledger",
-        "accounting",
-        "accounts",
-      ]);
+    const ledgerFile = findFile([
+      "ledger",
+      "accounting",
+      "accounts",
+    ]);
 
     let orderedFiles = [
       razorpayFile,
@@ -249,67 +271,21 @@ function App() {
       ledgerFile,
     ];
 
-    // If the filenames don't identify the files,
-    // use the order in which the user selected them:
-    // Razorpay → Bank → Ledger.
-    if (orderedFiles.some((file) => !file)) {
-      orderedFiles = files;
-    }
+    const identified = orderedFiles.filter(Boolean);
 
-    // Make sure all three physical files are different.
-    if (new Set(orderedFiles).size !== 3) {
-      setError(
-        "JUICE could not identify the three source files. Please select them in this order: Razorpay, Bank, Ledger."
-      );
-
-      setUploadStatus("");
-      event.target.value = "";
-      return;
-    }
-
-    // IMPORTANT:
-    // Selecting files does NOT upload or reconcile them.
-    // We only keep them in React state until the user clicks
-    // "Start Reconciliation".
-    setSelectedFiles(orderedFiles);
-
-    setError("");
-
-    setUploadStatus(
-      "✓ 3 files ready. Click Start Reconciliation to process them."
-    );
-
-    // Allows the same files to be selected again later.
-    event.target.value = "";
-  };
-
-  // =====================================================
-  // UPLOAD FILES AND RECONCILE
-  // =====================================================
-
-  const uploadAndReconcile = async (files) => {
-    if (!files || files.length !== 3) {
-      setError(
-        "Please upload your Razorpay, Bank, and Ledger files first."
-      );
-
-      setUploadStatus(
-        "Upload your three financial files before starting reconciliation."
-      );
-
-      return;
+    if (identified.length !== 3) {
+      orderedFiles = selectedFiles;
     }
 
     const [
-      razorpayFile,
-      bankFile,
-      ledgerFile,
-    ] = files;
+      finalRazorpayFile,
+      finalBankFile,
+      finalLedgerFile,
+    ] = orderedFiles;
 
     setUploading(true);
-    setLoading(true);
+    setLoading(false);
     setError("");
-
     setUploadStatus(
       "Uploading your financial files..."
     );
@@ -319,21 +295,21 @@ function App() {
 
       formData.append(
         "razorpay_file",
-        razorpayFile
+        finalRazorpayFile
       );
 
       formData.append(
         "bank_file",
-        bankFile
+        finalBankFile
       );
 
       formData.append(
         "ledger_file",
-        ledgerFile
+        finalLedgerFile
       );
 
       setUploadStatus(
-        "Cleaning and preprocessing your financial data..."
+        "Files uploaded. Cleaning and preprocessing your data..."
       );
 
       const response = await fetch(
@@ -345,66 +321,106 @@ function App() {
       );
 
       if (!response.ok) {
-        let errorMessage =
+        let message =
           "Upload or preprocessing failed.";
 
         try {
           const errorData =
             await response.json();
 
-          errorMessage =
-            errorData.detail ||
-            errorMessage;
+          message =
+            errorData.detail || message;
         } catch {
-          // Keep the default error message.
+          // Keep the friendly fallback message.
         }
 
-        throw new Error(errorMessage);
+        throw new Error(message);
       }
 
       setUploadStatus(
-        "Data cleaned successfully. JUICE is reconciling your financial records..."
+        "JUICE is analysing your financial data..."
       );
 
-      const data =
-        await response.json();
+      const data = await response.json();
 
+      // The backend returns the reconciliation result.
       setResult(data);
-
       setSeverityFilter("ALL");
       setSelectedException(null);
       setAiSummaryOpen(false);
 
-      // Processing is complete, so clear the selected files.
-      setSelectedFiles([]);
-
       setUploadStatus(
-        "✓ Your financial files were processed successfully."
+        "✓ Your data was processed successfully."
       );
 
       setTimeout(() => {
         setUploadStatus("");
-
         scrollToSection("overview");
       }, 1800);
-
     } catch (err) {
       console.error(
-        "RECONCILIATION ERROR:",
+        "JUICE UPLOAD ERROR:",
         err
       );
 
       setError(
-        err?.message ||
-          "JUICE could not process your financial files. Check that the backend is running and that your files contain valid financial data."
+        err.message ||
+        "JUICE could not process your financial files. Make sure the backend is running and your files contain the required financial columns."
       );
 
       setUploadStatus("");
-
     } finally {
       setUploading(false);
-      setLoading(false);
     }
+  };
+
+  // =====================================================
+  // UPLOAD HISTORY
+  // =====================================================
+
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    setHistoryError("");
+
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8000/history"
+      );
+
+      if (!response.ok) {
+        let message = "Could not load upload history.";
+
+        try {
+          const errorData = await response.json();
+          message = errorData.detail || message;
+        } catch {
+          // Keep the friendly fallback message.
+        }
+
+        throw new Error(message);
+      }
+
+      const data = await response.json();
+
+      setHistory(data.history || []);
+    } catch (err) {
+      console.error("JUICE HISTORY ERROR:", err);
+
+      setHistoryError(
+        err.message ||
+          "JUICE could not load your upload history. Make sure the backend is running."
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const openHistory = async () => {
+    await loadHistory();
+
+    setTimeout(() => {
+      scrollToSection("history");
+    }, 100);
   };
 
   // =====================================================
@@ -414,7 +430,7 @@ function App() {
   const generateFinanceReport = async () => {
     if (!result) {
       setError(
-        "Run a reconciliation before generating the finance report."
+        "Run a reconciliation or upload your financial files before generating the finance report."
       );
 
       return;
@@ -422,6 +438,9 @@ function App() {
 
     setReportLoading(true);
     setError("");
+    setUploadStatus(
+      "Preparing your JUICE finance report..."
+    );
 
     try {
       const response = await fetch(
@@ -436,30 +455,66 @@ function App() {
       );
 
       if (!response.ok) {
-        throw new Error("Report generation failed.");
+        let message =
+          "Report generation failed.";
+
+        try {
+          const errorData =
+            await response.json();
+
+          message =
+            errorData.detail || message;
+        } catch {
+          // Keep the friendly fallback message.
+        }
+
+        throw new Error(message);
       }
 
       const blob = await response.blob();
 
-      const url = window.URL.createObjectURL(blob);
+      if (!blob || blob.size === 0) {
+        throw new Error(
+          "The backend returned an empty PDF."
+        );
+      }
 
-      const link = document.createElement("a");
+      const url = window.URL.createObjectURL(
+        blob
+      );
+
+      const link = document.createElement(
+        "a"
+      );
 
       link.href = url;
-      link.download = "JUICE_Finance_Report.pdf";
+      link.download =
+        "JUICE_Finance_Report.pdf";
 
       document.body.appendChild(link);
-
       link.click();
-
       link.remove();
 
       window.URL.revokeObjectURL(url);
+
+      setUploadStatus(
+        "✓ Finance report downloaded successfully."
+      );
+
+      setTimeout(() => {
+        setUploadStatus("");
+      }, 3000);
     } catch (err) {
-      console.error(err);
+      console.error(
+        "JUICE REPORT ERROR:",
+        err
+      );
+
+      setUploadStatus("");
 
       setError(
-        "JUICE couldn't generate the finance report. Make sure the report endpoint is available."
+        err.message ||
+        "JUICE could not generate the finance report. Make sure the backend report endpoint is running."
       );
     } finally {
       setReportLoading(false);
@@ -873,6 +928,13 @@ function App() {
             }
           >
             Exceptions
+          </button>
+
+          <button
+            className="nav-tool"
+            onClick={openHistory}
+          >
+            History
           </button>
 
           <button
@@ -2614,6 +2676,255 @@ function App() {
           INSTRUCTIONS SIDE PANEL
       ================================================= */}
 
+      {/* =================================================
+          HISTORY
+      ================================================= */}
+
+      <section
+        id="history"
+        className="history-section"
+        style={{
+          padding: "70px 6vw",
+          minHeight: "420px",
+        }}
+      >
+
+        <div
+          style={{
+            maxWidth: "1200px",
+            margin: "0 auto",
+          }}
+        >
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "20px",
+              marginBottom: "28px",
+            }}
+          >
+
+            <div>
+              <div
+                style={{
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  letterSpacing: "0.14em",
+                  textTransform: "uppercase",
+                  opacity: 0.65,
+                  marginBottom: "8px",
+                }}
+              >
+                JUICE MEMORY
+              </div>
+
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: "clamp(30px, 4vw, 48px)",
+                }}
+              >
+                Upload History
+              </h2>
+
+              <p
+                style={{
+                  margin: "10px 0 0",
+                  opacity: 0.7,
+                }}
+              >
+                Review your previous reconciliation runs, including when they were uploaded and what JUICE found.
+              </p>
+            </div>
+
+            <button
+              className="secondary-button"
+              onClick={loadHistory}
+              disabled={historyLoading}
+            >
+              {historyLoading ? "Refreshing..." : "↻ Refresh History"}
+            </button>
+
+          </div>
+
+          {historyError && (
+            <div
+              style={{
+                padding: "16px 18px",
+                marginBottom: "20px",
+                borderRadius: "14px",
+                border: "1px solid rgba(220, 70, 70, 0.25)",
+              }}
+            >
+              {historyError}
+            </div>
+          )}
+
+          {historyLoading && history.length === 0 && (
+            <div
+              style={{
+                padding: "40px 20px",
+                textAlign: "center",
+                opacity: 0.7,
+              }}
+            >
+              Loading your upload history...
+            </div>
+          )}
+
+          {!historyLoading && !historyError && history.length === 0 && (
+            <div
+              style={{
+                padding: "50px 24px",
+                textAlign: "center",
+                borderRadius: "20px",
+                border: "1px dashed rgba(128, 128, 128, 0.35)",
+              }}
+            >
+              <div style={{ fontSize: "34px", marginBottom: "12px" }}>📂</div>
+              <strong>No uploads yet</strong>
+              <p style={{ opacity: 0.65, marginBottom: 0 }}>
+                Upload your Razorpay, bank, and ledger files and your completed reconciliation will appear here.
+              </p>
+            </div>
+          )}
+
+          {history.length > 0 && (
+            <div
+              style={{
+                display: "grid",
+                gap: "16px",
+              }}
+            >
+
+              {history.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    padding: "22px",
+                    borderRadius: "20px",
+                    border: "1px solid rgba(128, 128, 128, 0.2)",
+                  }}
+                >
+
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "flex-start",
+                      gap: "20px",
+                      flexWrap: "wrap",
+                    }}
+                  >
+
+                    <div>
+                      <strong style={{ fontSize: "18px" }}>
+                        Upload #{item.id}
+                      </strong>
+
+                      <div
+                        style={{
+                          marginTop: "6px",
+                          opacity: 0.65,
+                        }}
+                      >
+                        📅 {item.uploaded_at}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        fontWeight: 700,
+                      }}
+                    >
+                      {Number(item.match_rate || 0).toFixed(2)}% matched
+                    </div>
+
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                      gap: "12px",
+                      marginTop: "18px",
+                    }}
+                  >
+
+                    <div>
+                      <small>Razorpay</small>
+                      <div style={{ fontWeight: 600, marginTop: "4px", overflowWrap: "anywhere" }}>
+                        {item.razorpay_filename || "—"}
+                      </div>
+                    </div>
+
+                    <div>
+                      <small>Bank</small>
+                      <div style={{ fontWeight: 600, marginTop: "4px", overflowWrap: "anywhere" }}>
+                        {item.bank_filename || "—"}
+                      </div>
+                    </div>
+
+                    <div>
+                      <small>Ledger</small>
+                      <div style={{ fontWeight: 600, marginTop: "4px", overflowWrap: "anywhere" }}>
+                        {item.ledger_filename || "—"}
+                      </div>
+                    </div>
+
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+                      gap: "12px",
+                      marginTop: "20px",
+                    }}
+                  >
+
+                    <div>
+                      <small>Transactions</small>
+                      <div style={{ fontSize: "20px", fontWeight: 700, marginTop: "4px" }}>
+                        {item.total_transactions ?? 0}
+                      </div>
+                    </div>
+
+                    <div>
+                      <small>Matched</small>
+                      <div style={{ fontSize: "20px", fontWeight: 700, marginTop: "4px" }}>
+                        {item.matched ?? 0}
+                      </div>
+                    </div>
+
+                    <div>
+                      <small>Exceptions</small>
+                      <div style={{ fontSize: "20px", fontWeight: 700, marginTop: "4px" }}>
+                        {item.exceptions ?? 0}
+                      </div>
+                    </div>
+
+                    <div>
+                      <small>Financial Exposure</small>
+                      <div style={{ fontSize: "20px", fontWeight: 700, marginTop: "4px" }}>
+                        ₹{formatMoney(item.financial_exposure)}
+                      </div>
+                    </div>
+
+                  </div>
+
+                </div>
+              ))}
+
+            </div>
+          )}
+
+        </div>
+
+      </section>
+
       {instructionsOpen && (
         <div className="instructions-backdrop">
 
@@ -2667,7 +2978,7 @@ function App() {
 
                 <p>
                   Upload a CSV, XLS, or XLSX
-                  financial dataset. 
+                  financial dataset.
                 </p>
 
               </div>
@@ -2677,26 +2988,6 @@ function App() {
             <div className="instruction-step">
 
               <span>02</span>
-
-              <div>
-
-                <strong>
-                  JUICE needs 3 files to perform reconciliation:
-                </strong>
-
-                <p>
-                  ① Razorpay file - Your Razorpay payment/settlement transaction data. 
-                  ② Bank file - Your bank transaction statement containing the corresponding transactions.
-                  ③ Ledger file - Your accounting/financial ledger containing the recorded transactions.
-                </p>
-
-              </div>
-
-            </div>
-
-            <div className="instruction-step">
-
-              <span>03</span>
 
               <div>
 
@@ -2717,7 +3008,7 @@ function App() {
 
             <div className="instruction-step">
 
-              <span>04</span>
+              <span>03</span>
 
               <div>
 
@@ -2738,7 +3029,7 @@ function App() {
 
             <div className="instruction-step">
 
-              <span>05</span>
+              <span>04</span>
 
               <div>
 
@@ -2758,7 +3049,7 @@ function App() {
 
             <div className="instruction-step">
 
-              <span>06</span>
+              <span>05</span>
 
               <div>
 
@@ -2810,7 +3101,7 @@ function App() {
                 );
               }}
             >
-              ↑ Choose 3 files
+              ↑ Choose a file
             </button>
 
           </aside>
