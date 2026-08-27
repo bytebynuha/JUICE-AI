@@ -2,6 +2,9 @@ from pathlib import Path
 import shutil
 import uuid
 
+
+from fastapi import FastAPI
+
 import pandas as pd
 
 from fastapi import (
@@ -16,6 +19,11 @@ from fastapi.responses import FileResponse
 
 from backend.reconciliation import reconcile
 
+from backend.history import (
+    create_history_database,
+    save_upload_history,
+    get_upload_history,
+)
 
 # ============================================================
 # JUICE APP
@@ -26,6 +34,13 @@ app = FastAPI(
     description="Joint Unified Intelligence for Commerce & Expenses",
     version="1.0.0",
 )
+
+
+# ============================================================
+# CREATE HISTORY DATABASE
+# ============================================================
+
+create_history_database()
 
 
 # ============================================================
@@ -741,6 +756,17 @@ async def upload_and_reconcile(
             "========================================"
         )
 
+        # ====================================================
+        # SAVE UPLOAD TO HISTORY
+        # ====================================================
+
+        save_upload_history(
+            razorpay_filename=razorpay_file.filename,
+            bank_filename=bank_file.filename,
+            ledger_filename=ledger_file.filename,
+            result=result,
+        )
+
         return result
 
     except HTTPException:
@@ -850,6 +876,19 @@ def generate_report(
                 f"PDF report: {str(exc)}"
             ),
         )
+
+
+# ============================================================
+# UPLOAD HISTORY
+# ============================================================
+
+@app.get("/history")
+def history():
+
+    return {
+        "success": True,
+        "history": get_upload_history(),
+    }
 
 
 # ============================================================

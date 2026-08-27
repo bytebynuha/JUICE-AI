@@ -5,6 +5,7 @@ function App() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [reportLoading, setReportLoading] = useState(false);
   const [error, setError] = useState("");
   const [uploadStatus, setUploadStatus] = useState("");
@@ -135,45 +136,23 @@ function App() {
   };
 
   // =====================================================
-  // RUN NORMAL RECONCILIATION
+  // RUN RECONCILIATION
   // =====================================================
 
   const runReconciliation = async () => {
-    setLoading(true);
-    setError("");
-    setUploadStatus("");
-
-    try {
-      const response = await fetch(
-        "http://127.0.0.1:8000/reconcile",
-        {
-          method: "POST",
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("Reconciliation failed.");
-      }
-
-      const data = await response.json();
-
-      setResult(data);
-      setSeverityFilter("ALL");
-      setSelectedException(null);
-      setAiSummaryOpen(false);
-
-      setTimeout(() => {
-        scrollToSection("overview");
-      }, 100);
-    } catch (err) {
-      console.error(err);
-
+    if (!selectedFiles || selectedFiles.length !== 3) {
       setError(
-        "JUICE couldn't connect to the financial engine. Make sure the backend is running."
+        "Please upload your Razorpay, Bank, and Ledger files first."
       );
-    } finally {
-      setLoading(false);
+
+      setUploadStatus(
+        "Upload your three financial files, then click Start Reconciliation."
+      );
+
+      return;
     }
+
+    await uploadAndReconcile(selectedFiles);
   };
 
   // =====================================================
@@ -186,35 +165,37 @@ function App() {
     }
   };
 
-  const handleFileChange = async (event) => {
+  const handleFileChange = (event) => {
     const files = Array.from(event.target.files || []);
 
     if (!files.length) {
       return;
     }
 
-    await uploadAndReconcile(files);
-
-    // Allows the same files to be selected again later
-    event.target.value = "";
-  };
-
-  const uploadAndReconcile = async (files) => {
     const allowedExtensions = [
       ".csv",
       ".xls",
       ".xlsx",
     ];
 
+    // User must select exactly three files.
     if (files.length !== 3) {
       setError(
         "Please select exactly 3 files: Razorpay, Bank, and Ledger."
       );
+
+      setUploadStatus(
+        "Choose your three financial files together."
+      );
+
+      event.target.value = "";
       return;
     }
 
+    // Check file types before saving them.
     const invalidFile = files.find((file) => {
       const fileName = file.name.toLowerCase();
+
       return !allowedExtensions.some((extension) =>
         fileName.endsWith(extension)
       );
@@ -224,68 +205,135 @@ function App() {
       setError(
         `Unsupported file format: ${invalidFile.name}. Please upload only CSV, XLS, or XLSX files.`
       );
+
+      setUploadStatus("");
+      event.target.value = "";
       return;
     }
 
-    // Identify the three financial sources from their filenames.
-    // If filenames do not contain the source names, the selected
-    // order is used: Razorpay, Bank, Ledger.
+    // Identify files by their names.
     const findFile = (keywords) =>
       files.find((file) => {
         const name = file.name.toLowerCase();
+
         return keywords.some((keyword) =>
           name.includes(keyword)
         );
       });
 
     const razorpayFile =
-      findFile(["razorpay", "razor", "payment"]) ||
-      files[0];
+      findFile([
+        "razorpay",
+        "razor",
+        "payment",
+        "payments",
+      ]);
 
     const bankFile =
-      findFile(["bank", "statement"]) ||
-      files.find((file) => file !== razorpayFile) ||
-      files[1];
+      findFile([
+        "bank",
+        "statement",
+        "bankstatement",
+      ]);
 
     const ledgerFile =
-      findFile(["ledger", "accounting", "accounts"]) ||
-      files.find(
-        (file) =>
-          file !== razorpayFile &&
-          file !== bankFile
-      ) ||
-      files[2];
+      findFile([
+        "ledger",
+        "accounting",
+        "accounts",
+      ]);
 
-    // Make sure one physical file is not assigned to two sources.
-    const selectedFiles = [
+    let orderedFiles = [
       razorpayFile,
       bankFile,
       ledgerFile,
     ];
 
-    if (new Set(selectedFiles).size !== 3) {
+    // If the filenames don't identify the files,
+    // use the order in which the user selected them:
+    // Razorpay → Bank → Ledger.
+    if (orderedFiles.some((file) => !file)) {
+      orderedFiles = files;
+    }
+
+    // Make sure all three physical files are different.
+    if (new Set(orderedFiles).size !== 3) {
       setError(
         "JUICE could not identify the three source files. Please select them in this order: Razorpay, Bank, Ledger."
       );
+
+      setUploadStatus("");
+      event.target.value = "";
       return;
     }
 
-    setUploading(true);
-    setLoading(false);
+    // IMPORTANT:
+    // Selecting files does NOT upload or reconcile them.
+    // We only keep them in React state until the user clicks
+    // "Start Reconciliation".
+    setSelectedFiles(orderedFiles);
+
     setError("");
+
     setUploadStatus(
-      "Uploading Razorpay, bank, and ledger files from your PC..."
+      "✓ 3 files ready. Click Start Reconciliation to process them."
+    );
+
+    // Allows the same files to be selected again later.
+    event.target.value = "";
+  };
+
+  // =====================================================
+  // UPLOAD FILES AND RECONCILE
+  // =====================================================
+
+  const uploadAndReconcile = async (files) => {
+    if (!files || files.length !== 3) {
+      setError(
+        "Please upload your Razorpay, Bank, and Ledger files first."
+      );
+
+      setUploadStatus(
+        "Upload your three financial files before starting reconciliation."
+      );
+
+      return;
+    }
+
+    const [
+      razorpayFile,
+      bankFile,
+      ledgerFile,
+    ] = files;
+
+    setUploading(true);
+    setLoading(true);
+    setError("");
+
+    setUploadStatus(
+      "Uploading your financial files..."
     );
 
     try {
       const formData = new FormData();
 
-      formData.append("razorpay_file", razorpayFile);
-      formData.append("bank_file", bankFile);
-      formData.append("ledger_file", ledgerFile);
+      formData.append(
+        "razorpay_file",
+        razorpayFile
+      );
+
+      formData.append(
+        "bank_file",
+        bankFile
+      );
+
+      formData.append(
+        "ledger_file",
+        ledgerFile
+      );
 
       setUploadStatus(
-        "Files uploaded. Cleaning and preprocessing your financial data..."
+        "Cleaning and preprocessing your financial data..."
       );
 
       const response = await fetch(
@@ -301,12 +349,14 @@ function App() {
           "Upload or preprocessing failed.";
 
         try {
-          const errorData = await response.json();
+          const errorData =
+            await response.json();
+
           errorMessage =
-            errorData.detail || errorMessage;
+            errorData.detail ||
+            errorMessage;
         } catch {
-          // Keep the default error message if the backend
-          // does not return JSON.
+          // Keep the default error message.
         }
 
         throw new Error(errorMessage);
@@ -316,12 +366,17 @@ function App() {
         "Data cleaned successfully. JUICE is reconciling your financial records..."
       );
 
-      const data = await response.json();
+      const data =
+        await response.json();
 
       setResult(data);
+
       setSeverityFilter("ALL");
       setSelectedException(null);
       setAiSummaryOpen(false);
+
+      // Processing is complete, so clear the selected files.
+      setSelectedFiles([]);
 
       setUploadStatus(
         "✓ Your financial files were processed successfully."
@@ -329,10 +384,15 @@ function App() {
 
       setTimeout(() => {
         setUploadStatus("");
+
         scrollToSection("overview");
       }, 1800);
+
     } catch (err) {
-      console.error("UPLOAD ERROR:", err);
+      console.error(
+        "RECONCILIATION ERROR:",
+        err
+      );
 
       setError(
         err?.message ||
@@ -340,8 +400,10 @@ function App() {
       );
 
       setUploadStatus("");
+
     } finally {
       setUploading(false);
+      setLoading(false);
     }
   };
 
