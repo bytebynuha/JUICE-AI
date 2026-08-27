@@ -2605,7 +2605,7 @@ function App() {
 
                 <p>
                   Upload a CSV, XLS, or XLSX
-                  financial dataset.
+                  financial dataset. 
                 </p>
 
               </div>
@@ -2615,6 +2615,26 @@ function App() {
             <div className="instruction-step">
 
               <span>02</span>
+
+              <div>
+
+                <strong>
+                  JUICE needs 3 files to perform reconciliation:
+                </strong>
+
+                <p>
+                  ① Razorpay file - Your Razorpay payment/settlement transaction data. 
+                  ② Bank file - Your bank transaction statement containing the corresponding transactions.
+                  ③ Ledger file - Your accounting/financial ledger containing the recorded transactions.
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="instruction-step">
+
+              <span>03</span>
 
               <div>
 
@@ -2635,7 +2655,7 @@ function App() {
 
             <div className="instruction-step">
 
-              <span>03</span>
+              <span>04</span>
 
               <div>
 
@@ -2656,7 +2676,7 @@ function App() {
 
             <div className="instruction-step">
 
-              <span>04</span>
+              <span>05</span>
 
               <div>
 
@@ -2676,7 +2696,7 @@ function App() {
 
             <div className="instruction-step">
 
-              <span>05</span>
+              <span>06</span>
 
               <div>
 
