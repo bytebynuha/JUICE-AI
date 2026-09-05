@@ -1,4 +1,3 @@
-````markdown
 # JUICE AI — Joint Unified Intelligence for Commerce and Expenses
 
 ### Intelligent Finance Controller
@@ -805,4 +804,4 @@ JUICE is built around that idea.
 # 📜 License
 
 This project was created as a buildathon project and is intended for demonstration and evaluation purposes.
-````
+
